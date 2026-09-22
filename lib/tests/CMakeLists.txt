@@ -14,6 +14,7 @@ set(UNITTEST_SOURCES
     unittests/HttpDateTest.cc
     unittests/HttpHeaderTest.cc
     unittests/HttpResponseSwapTest.cc
+    unittests/HttpClientAddressFilterTest.cc
     unittests/MD5Test.cc
     unittests/MsgBufferTest.cc
     unittests/OStringStreamTest.cc

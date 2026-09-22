@@ -135,6 +135,12 @@ class HttpClientImpl final : public HttpClient,
                pipeliningCallbacksSize_.load(std::memory_order_relaxed);
     }
 
+    void setServerAddressFilter(
+        std::function<bool(const trantor::InetAddress &)> filter) override
+    {
+        serverAddressFilter_ = std::move(filter);
+    }
+
     std::size_t requestsBufferSize() override
     {
         return requestsBufferSize_.load(std::memory_order_relaxed);
@@ -183,6 +189,7 @@ class HttpClientImpl final : public HttpClient,
                         std::pair<HttpRequestPtr, HttpReqCallback> &&reqAndCb,
                         const trantor::TcpConnectionPtr &connPtr);
     void createTcpClient();
+    bool isServerAddressAllowed() const;
     std::queue<std::pair<HttpRequestPtr, HttpReqCallback>> pipeliningCallbacks_;
     std::list<std::pair<HttpRequestPtr, HttpReqCallback>> requestsBuffer_;
     void onRecvMessage(const trantor::TcpConnectionPtr &, trantor::MsgBuffer *);
@@ -205,6 +212,7 @@ class HttpClientImpl final : public HttpClient,
     std::string clientCertPath_;
     std::string clientKeyPath_;
     std::function<void(int)> sockOptCallback_;
+    std::function<bool(const trantor::InetAddress &)> serverAddressFilter_;
 };
 
 using HttpClientImplPtr = std::shared_ptr<HttpClientImpl>;

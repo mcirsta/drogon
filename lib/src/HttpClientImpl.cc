@@ -21,6 +21,7 @@
 #include <drogon/config.h>
 #include <stdlib.h>
 #include <algorithm>
+#include <stdexcept>
 
 using namespace trantor;
 using namespace drogon;
@@ -33,6 +34,19 @@ static const size_t kDefaultDNSTimeout{600};
 
 void HttpClientImpl::createTcpClient()
 {
+    if (!isServerAddressAllowed())
+    {
+        // Detach first: a completion callback may enqueue another request.
+        decltype(requestsBuffer_) rejectedRequests;
+        rejectedRequests.swap(requestsBuffer_);
+        requestsBufferSize_.store(0, std::memory_order_relaxed);
+        for (auto &request : rejectedRequests)
+        {
+            request.second(ReqResult::BadServerAddress, nullptr);
+        }
+        return;
+    }
+
     LOG_TRACE << "New TcpClient," << serverAddr_.toIpPort();
     tcpClientPtr_ =
         std::make_shared<trantor::TcpClient>(loop_, serverAddr_, "httpClient");
@@ -145,6 +159,33 @@ void HttpClientImpl::createTcpClient()
         }
     });
     tcpClientPtr_->connect();
+}
+
+bool HttpClientImpl::isServerAddressAllowed() const
+{
+    if (!serverAddressFilter_)
+    {
+        return true;
+    }
+    try
+    {
+        return serverAddressFilter_(serverAddr_);
+    }
+    catch (...)
+    {
+        // A failed policy evaluation must not permit a connection.
+        return false;
+    }
+}
+
+void HttpClient::setServerAddressFilter(
+    std::function<bool(const trantor::InetAddress &)> filter)
+{
+    if (filter)
+    {
+        throw std::logic_error(
+            "server address filtering is not supported by this HTTP client");
+    }
 }
 
 HttpClientImpl::HttpClientImpl(trantor::EventLoop *loop,
