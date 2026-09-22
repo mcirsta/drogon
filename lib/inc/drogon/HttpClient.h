@@ -21,6 +21,7 @@
 #include <drogon/HttpRequest.h>
 #include <trantor/utils/NonCopyable.h>
 #include <trantor/net/EventLoop.h>
+#include <trantor/net/InetAddress.h>
 #include <cstddef>
 #include <functional>
 #include <memory>
@@ -178,6 +179,27 @@ class DROGON_EXPORT HttpClient : public trantor::NonCopyable
        @endcode
      */
     virtual void setSockOptCallback(std::function<void(int)> cb) = 0;
+
+    /**
+     * @brief Set an optional filter for outgoing connection addresses.
+     *
+     * The filter receives the actual destination IP and port after DNS
+     * resolution (or the literal IP supplied to newHttpClient), before a
+     * connection is opened. Return true to allow the connection. Returning
+     * false or throwing rejects the pending requests with
+     * ReqResult::BadServerAddress and an empty response.
+     *
+     * The filter runs on the client's event loop and must not block or call
+     * back into the client. It is checked for each new connection, not for
+     * each request on an existing connection. DNS resolution, the Host header
+     * and TLS hostname/certificate verification are unchanged.
+     *
+     * Configure this before sending requests. An empty filter preserves the
+     * default behavior. The base implementation throws std::logic_error for
+     * a nonempty filter, so custom clients cannot silently ignore it.
+     */
+    virtual void setServerAddressFilter(
+        std::function<bool(const trantor::InetAddress &)> filter);
 
     /**
      * @brief Return the number of unsent http requests in the current http
