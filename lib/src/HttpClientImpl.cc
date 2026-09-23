@@ -22,6 +22,7 @@
 #include <stdlib.h>
 #include <algorithm>
 #include <stdexcept>
+#include <utility>
 
 using namespace trantor;
 using namespace drogon;
@@ -342,8 +343,8 @@ struct RequestCallbackParams
     {
     }
 
-    const drogon::HttpReqCallback callback;
-    const HttpClientImplPtr clientPtr;
+    drogon::HttpReqCallback callback;
+    HttpClientImplPtr clientPtr;
     const HttpRequestPtr requestPtr;
     bool timeoutFlag{false};
 };
@@ -354,7 +355,13 @@ void HttpClientImpl::sendRequestInLoop(const HttpRequestPtr &req,
 {
     if (timeout <= 0)
     {
-        sendRequestInLoop(req, std::move(callback));
+        auto callbackWithClient =
+            [thisPtr = shared_from_this(),
+             callback = std::move(callback)](ReqResult result,
+                                             const HttpResponsePtr &response) {
+                callback(result, response);
+            };
+        sendRequestInLoop(req, std::move(callbackWithClient));
         return;
     }
 
@@ -370,13 +377,16 @@ void HttpClientImpl::sendRequestInLoop(const HttpRequestPtr &req,
             auto callbackParamsPtr = weakCallbackBackPtr.lock();
             if (callbackParamsPtr != nullptr)
             {
-                auto &thisPtr = callbackParamsPtr->clientPtr;
                 if (callbackParamsPtr->timeoutFlag)
                 {
                     return;
                 }
 
                 callbackParamsPtr->timeoutFlag = true;
+                // Release ownership after completion, even if no response ever
+                // arrives. Keep the client alive while invoking the callback.
+                auto thisPtr = std::move(callbackParamsPtr->clientPtr);
+                auto callback = std::exchange(callbackParamsPtr->callback, {});
 
                 for (auto iter = thisPtr->requestsBuffer_.begin();
                      iter != thisPtr->requestsBuffer_.end();
@@ -389,19 +399,22 @@ void HttpClientImpl::sendRequestInLoop(const HttpRequestPtr &req,
                     }
                 }
 
-                (callbackParamsPtr->callback)(ReqResult::Timeout, nullptr);
+                // An already sent request must stay in the response queue so
+                // a late response cannot be mistaken for the next request's.
+                callback(ReqResult::Timeout, nullptr);
             }
         });
-    sendRequestInLoop(req,
-                      [callbackParamsPtr](ReqResult r,
-                                          const HttpResponsePtr &resp) {
-                          if (callbackParamsPtr->timeoutFlag)
-                          {
-                              return;
-                          }
-                          callbackParamsPtr->timeoutFlag = true;
-                          (callbackParamsPtr->callback)(r, resp);
-                      });
+    sendRequestInLoop(
+        req, [callbackParamsPtr](ReqResult r, const HttpResponsePtr &resp) {
+            if (callbackParamsPtr->timeoutFlag)
+            {
+                return;
+            }
+            callbackParamsPtr->timeoutFlag = true;
+            auto thisPtr = std::move(callbackParamsPtr->clientPtr);
+            auto callback = std::exchange(callbackParamsPtr->callback, {});
+            callback(r, resp);
+        });
 }
 
 static bool isValidIpAddr(const trantor::InetAddress &addr)
@@ -430,6 +443,8 @@ void HttpClientImpl::sendRequestInLoop(const drogon::HttpRequestPtr &req,
                                        drogon::HttpReqCallback &&callback)
 {
     loop_->assertInLoopThread();
+    // The completion wrapper owns the client until completion or timeout.
+    // Queue entries must not add another client reference that outlives it.
     for (const auto &header : headers_)
     {
         if (req->headers().find(header.first) == req->headers().end())
@@ -472,8 +487,7 @@ void HttpClientImpl::sendRequestInLoop(const drogon::HttpRequestPtr &req,
         auto callbackPtr =
             std::make_shared<drogon::HttpReqCallback>(std::move(callback));
         enqueueRequest(req,
-                       [thisPtr = shared_from_this(),
-                        callbackPtr](ReqResult result,
+                       [callbackPtr](ReqResult result,
                                      const HttpResponsePtr &response) {
                            (*callbackPtr)(result, response);
                        });
@@ -543,16 +557,10 @@ void HttpClientImpl::sendRequestInLoop(const drogon::HttpRequestPtr &req,
 
     // send request;
     auto connPtr = tcpClientPtr_->connection();
-    auto thisPtr = shared_from_this();
-
     // Not connected, push request to buffer and wait for connection
     if (!connPtr || connPtr->disconnected())
     {
-        enqueueRequest(req,
-                       [thisPtr, callback = std::move(callback)](
-                           ReqResult result, const HttpResponsePtr &response) {
-                           callback(result, response);
-                       });
+        enqueueRequest(req, callback);
         return;
     }
 
@@ -561,22 +569,12 @@ void HttpClientImpl::sendRequestInLoop(const drogon::HttpRequestPtr &req,
         requestsBuffer_.empty())
     {
         sendReq(connPtr, req);
-        pipeliningCallbacks_.push(
-            {req,
-             [thisPtr,
-              callback = std::move(callback)](ReqResult result,
-                                              const HttpResponsePtr &response) {
-                 callback(result, response);
-             }});
+        pipeliningCallbacks_.push({req, std::move(callback)});
         pipeliningCallbacksSize_.fetch_add(1, std::memory_order_relaxed);
     }
     else
     {
-        enqueueRequest(req,
-                       [thisPtr, callback = std::move(callback)](
-                           ReqResult result, const HttpResponsePtr &response) {
-                           callback(result, response);
-                       });
+        enqueueRequest(req, callback);
     }
 }
 
