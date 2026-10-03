@@ -21,10 +21,12 @@
 #include <drogon/HttpRequest.h>
 #include <trantor/utils/NonCopyable.h>
 #include <trantor/net/EventLoop.h>
+#include <trantor/net/InetAddress.h>
 #include <cstddef>
 #include <functional>
 #include <memory>
 #include <future>
+#include <string>
 #include "drogon/HttpBinder.h"
 
 #ifdef __cpp_impl_coroutine
@@ -178,6 +180,43 @@ class DROGON_EXPORT HttpClient : public trantor::NonCopyable
        @endcode
      */
     virtual void setSockOptCallback(std::function<void(int)> cb) = 0;
+
+    /// Read-only context supplied to the before-connect callback.
+    struct ConnectionInfo
+    {
+        /// Client hostname or literal IP, as returned by host(). This is not
+        /// a request's Host header and does not include the scheme or port.
+        std::string host;
+        /// Actual destination IP and port selected for this connection.
+        trantor::InetAddress address;
+        /// Whether HTTPS was requested, not a completed TLS handshake.
+        bool secure{false};
+    };
+
+    using BeforeConnectCallback = std::function<bool(const ConnectionInfo &)>;
+
+    /**
+     * @brief Set an optional callback to inspect and approve a new connection.
+     *
+     * The callback receives the client hostname, resolved destination IP/port
+     * (or literal IP supplied to newHttpClient) and HTTPS setting, after DNS
+     * resolution but before creating the TCP client or opening a socket.
+     * Return true to proceed. Returning false or throwing rejects pending
+     * requests exactly once with ReqResult::BadServerAddress and an empty
+     * response. The callback is not called if address resolution fails.
+     *
+     * The callback runs on the client's event loop and must not block or call
+     * back into the client. It is checked for each new connection, not for
+     * each request on an existing connection. DNS resolution, the Host header
+     * and TLS hostname/certificate verification are unchanged. The context
+     * is valid only for the duration of the callback; copy it if needed later.
+     * It cannot be used to change the connection's destination or TLS settings.
+     *
+     * Configure this before sending requests. An empty callback preserves the
+     * default behavior. The base implementation throws std::logic_error for
+     * a nonempty callback, so custom clients cannot silently ignore a policy.
+     */
+    virtual void setBeforeConnectCallback(BeforeConnectCallback callback);
 
     /**
      * @brief Return the number of unsent http requests in the current http

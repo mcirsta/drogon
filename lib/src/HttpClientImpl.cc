@@ -21,6 +21,7 @@
 #include <drogon/config.h>
 #include <stdlib.h>
 #include <algorithm>
+#include <stdexcept>
 #include <utility>
 
 using namespace trantor;
@@ -34,6 +35,19 @@ static const size_t kDefaultDNSTimeout{600};
 
 void HttpClientImpl::createTcpClient()
 {
+    if (!isConnectionAllowed())
+    {
+        // Detach first: a completion callback may enqueue another request.
+        decltype(requestsBuffer_) rejectedRequests;
+        rejectedRequests.swap(requestsBuffer_);
+        requestsBufferSize_.store(0, std::memory_order_relaxed);
+        for (auto &request : rejectedRequests)
+        {
+            request.second(ReqResult::BadServerAddress, nullptr);
+        }
+        return;
+    }
+
     LOG_TRACE << "New TcpClient," << serverAddr_.toIpPort();
     tcpClientPtr_ =
         std::make_shared<trantor::TcpClient>(loop_, serverAddr_, "httpClient");
@@ -146,6 +160,33 @@ void HttpClientImpl::createTcpClient()
         }
     });
     tcpClientPtr_->connect();
+}
+
+bool HttpClientImpl::isConnectionAllowed() const
+{
+    if (!beforeConnectCallback_)
+    {
+        return true;
+    }
+    try
+    {
+        return beforeConnectCallback_(
+            ConnectionInfo{host(), serverAddr_, useSSL_});
+    }
+    catch (...)
+    {
+        // A failed policy evaluation must not permit a connection.
+        return false;
+    }
+}
+
+void HttpClient::setBeforeConnectCallback(BeforeConnectCallback callback)
+{
+    if (callback)
+    {
+        throw std::logic_error(
+            "before-connect callbacks are not supported by this HTTP client");
+    }
 }
 
 HttpClientImpl::HttpClientImpl(trantor::EventLoop *loop,

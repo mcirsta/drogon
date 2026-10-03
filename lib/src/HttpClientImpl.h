@@ -135,6 +135,11 @@ class HttpClientImpl final : public HttpClient,
                pipeliningCallbacksSize_.load(std::memory_order_relaxed);
     }
 
+    void setBeforeConnectCallback(BeforeConnectCallback callback) override
+    {
+        beforeConnectCallback_ = std::move(callback);
+    }
+
     std::size_t requestsBufferSize() override
     {
         return requestsBufferSize_.load(std::memory_order_relaxed);
@@ -183,6 +188,7 @@ class HttpClientImpl final : public HttpClient,
                         std::pair<HttpRequestPtr, HttpReqCallback> &&reqAndCb,
                         const trantor::TcpConnectionPtr &connPtr);
     void createTcpClient();
+    bool isConnectionAllowed() const;
     std::queue<std::pair<HttpRequestPtr, HttpReqCallback>> pipeliningCallbacks_;
     std::list<std::pair<HttpRequestPtr, HttpReqCallback>> requestsBuffer_;
     void onRecvMessage(const trantor::TcpConnectionPtr &, trantor::MsgBuffer *);
@@ -205,6 +211,7 @@ class HttpClientImpl final : public HttpClient,
     std::string clientCertPath_;
     std::string clientKeyPath_;
     std::function<void(int)> sockOptCallback_;
+    BeforeConnectCallback beforeConnectCallback_;
 };
 
 using HttpClientImplPtr = std::shared_ptr<HttpClientImpl>;
